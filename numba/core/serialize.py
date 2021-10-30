@@ -139,13 +139,11 @@ _unpickled_memo = {}
 
 def _numba_unpickle(address, bytedata, hashed):
     """Used by `numba_unpickle` from _helperlib.c
-
     Parameters
     ----------
     address : int
     bytedata : bytes
     hashed : bytes
-
     Returns
     -------
     obj : object
@@ -177,10 +175,8 @@ loads = pickle.loads
 
 class _CustomPickled:
     """A wrapper for objects that must be pickled with `NumbaPickler`.
-
     Standard `pickle` will pick up the implementation registered via `copyreg`.
     This will spawn a `NumbaPickler` instance to serialize the data.
-
     `NumbaPickler` overrides the handling of this type so as not to spawn a
     new pickler for the object when it is already being pickled by a
     `NumbaPickler`.
@@ -202,7 +198,6 @@ class _CustomPickled:
 
 def _unpickle__CustomPickled(serialized):
     """standard unpickling for `_CustomPickled`.
-
     Uses `NumbaPickler` to load.
     """
     ctor, states = loads(serialized)
@@ -211,7 +206,6 @@ def _unpickle__CustomPickled(serialized):
 
 def _pickle__CustomPickled(cp):
     """standard pickling for `_CustomPickled`.
-
     Uses `NumbaPickler` to dump.
     """
     serialized = dumps((cp.ctor, cp.states))
@@ -224,15 +218,12 @@ copyreg.pickle(_CustomPickled, _pickle__CustomPickled)
 
 def custom_reduce(cls, states):
     """For customizing object serialization in `__reduce__`.
-
     Object states provided here are used as keyword arguments to the
     `._rebuild()` class method.
-
     Parameters
     ----------
     states : dict
         Dictionary of object states to be serialized.
-
     Returns
     -------
     result : tuple
@@ -243,7 +234,6 @@ def custom_reduce(cls, states):
 
 def custom_rebuild(custom_pickled):
     """Customized object deserialization.
-
     This function is referenced internally by `custom_reduce()`.
     """
     cls, states = custom_pickled.ctor, custom_pickled.states
@@ -252,11 +242,9 @@ def custom_rebuild(custom_pickled):
 
 def is_serialiable(obj):
     """Check if *obj* can be serialized.
-
     Parameters
     ----------
     obj : object
-
     Returns
     --------
     can_serialize : bool
@@ -279,13 +267,10 @@ class _TracedPicklingError(pickle.PicklingError):
 
 class SlowNumbaPickler(pickle._Pickler):
     """Extends the pure-python Pickler to support the pickling need in Numba.
-
     Adds pickling for closure functions, modules.
     Adds customized pickling for _CustomPickled to avoid invoking a new
     Pickler instance.
-
     Note: this is used on Python < 3.8 unless `pickle5` is installed.
-
     Note: This is good for debugging because the C-pickler hides the traceback
     """
 
@@ -424,7 +409,6 @@ class ReduceMixin(abc.ABC):
 
 def _is_importable(obj):
     """Check if an object is importable.
-
     Parameters
     ----------
     obj :
@@ -458,7 +442,6 @@ def _function_setstate(obj, states):
 
 def _reduce_function_no_cells(func, globs):
     """_reduce_function() but return empty cells instead.
-
     """
     if func.__closure__:
         oldcells = [cell.cell_contents for cell in func.__closure__]
@@ -497,7 +480,6 @@ def _cell_reduce(obj):
 def _cell_set(cell, value):
     """Set *value* into *cell* because `.cell_contents` is not writable
     before python 3.7.
-
     See https://github.com/cloudpipe/cloudpickle/blob/9518ae3cc71b7a6c14478a6881c0db41d73812b8/cloudpickle/cloudpickle.py#L298   # noqa: E501
     """
     if PYVERSION >= (3, 7):  # pragma: no branch
