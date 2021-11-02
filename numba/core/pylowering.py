@@ -169,7 +169,7 @@ class PyLower(BaseLower):
 
     @utils.cached_property
     def _omitted_typobj(self):
-        """Return a `OmittedArg` type instance in LLVM value suitable for
+        """Return a `OmittedArg` type instance as a LLVM value suitable for
         testing at runtime.
         """
         from numba.core.dispatcher import OmittedArg
@@ -194,7 +194,6 @@ class PyLower(BaseLower):
         elif isinstance(value, ir.Yield):
             return self.lower_yield(value)
         elif isinstance(value, ir.Arg):
-            # TODO: check why value.name may not exist
             param = self.func_ir.func_id.pysig.parameters.get(value.name)
 
             obj = self.fnargs[value.index]

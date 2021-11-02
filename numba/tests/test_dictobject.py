@@ -912,6 +912,42 @@ class TestDictObject(MemoryLeakMixin, TestCase):
 
         self.assertEqual(foo(), [1, 2])
 
+    def test_024_unicode_getitem_keys(self):
+        # See issue #6135
+        @njit
+        def foo():
+            s = 'a\u1234'
+            d = {s[0] : 1}
+            return d['a']
+
+        self.assertEqual(foo(), foo.py_func())
+
+        @njit
+        def foo():
+            s = 'abc\u1234'
+            d = {s[:1] : 1}
+            return d['a']
+
+        self.assertEqual(foo(), foo.py_func())
+
+    def test_issue6570_alignment_padding(self):
+        # Create a key type that is 12-bytes long on a 8-byte aligned system
+        # so that the a 4-byte padding is needed.
+        # If the 4-byte padding is not zero-filled, it will have garbage data
+        # that affects key matching in the lookup.
+        keyty = types.Tuple([types.uint64, types.float32])
+
+        @njit
+        def foo():
+            d = dictobject.new_dict(keyty, float64)
+            t1 = np.array([3], dtype=np.uint64)
+            t2 = np.array([5.67], dtype=np.float32)
+            v1 = np.array([10.23], dtype=np.float32)
+            d[(t1[0], t2[0])] = v1[0]
+            return (t1[0], t2[0]) in d
+
+        self.assertTrue(foo())
+
 
 class TestDictTypeCasting(TestCase):
     def check_good(self, fromty, toty):
@@ -1498,6 +1534,40 @@ class TestDictInferred(TestCase):
             },
         )
 
+    def test_comprehension_basic(self):
+        @njit
+        def foo():
+            return {i: 2 * i for i in range(10)}
+
+        self.assertEqual(foo(), foo.py_func())
+
+    def test_comprehension_basic_mixed_type(self):
+        @njit
+        def foo():
+            return {i: float(j) for i, j in zip(range(10), range(10, 0, -1))}
+
+        self.assertEqual(foo(), foo.py_func())
+
+    def test_comprehension_involved(self):
+        @njit
+        def foo():
+            a = {0: 'A', 1: 'B', 2: 'C'}
+            return {3 + i: a[i] for i in range(3)}
+
+        self.assertEqual(foo(), foo.py_func())
+
+    def test_comprehension_fail_mixed_type(self):
+        @njit
+        def foo():
+            a = {0: 'A', 1: 'B', 2: 1j}
+            return {3 + i: a[i] for i in range(3)}
+
+        with self.assertRaises(TypingError) as e:
+            foo()
+
+        excstr = str(e.exception)
+        self.assertIn("Cannot cast complex128 to unicode_type", excstr)
+
 
 class TestNonCompiledInfer(TestCase):
     def test_check_untyped_dict_ops(self):
@@ -1726,6 +1796,65 @@ class TestTypedDictInitialValues(MemoryLeakMixin, TestCase):
             bar(x)
 
         foo()
+
+    def test_mutation_not_carried_single_function(self):
+        # this is another pattern for using literally
+
+        @njit
+        def nop(*args):
+            pass
+
+        for fn, iv in (nop, None), (literally, {'a': 1, 'b': 2, 'c': 3}):
+            @njit
+            def baz(x):
+                pass
+
+            def bar(z):
+                pass
+
+            @overload(bar)
+            def ol_bar(z):
+                def impl(z):
+                    fn(z)
+                    baz(z)
+                return impl
+
+            @njit
+            def foo():
+                x = {'a': 1, 'b': 2, 'c': 3}
+                bar(x)
+                x['d'] = 4
+                return x
+
+            foo()
+            # baz should be specialised based on literally being invoked and
+            # the literal/unliteral arriving at the call site
+            larg = baz.signatures[0][0]
+            self.assertEqual(larg.initial_value, iv)
+
+    def test_unify_across_function_call(self):
+
+        @njit
+        def bar(x):
+            o = {1: 2}
+            if x:
+                o = {2: 3}
+            return o
+
+        @njit
+        def foo(x):
+            if x:
+                d = {3: 4}
+            else:
+                d = bar(x)
+            return d
+
+        e1 = Dict()
+        e1[3] = 4
+        e2 = Dict()
+        e2[1] = 2
+        self.assertEqual(foo(True), e1)
+        self.assertEqual(foo(False), e2)
 
 
 class TestLiteralStrKeyDict(MemoryLeakMixin, TestCase):
@@ -2068,6 +2197,53 @@ class TestLiteralStrKeyDict(MemoryLeakMixin, TestCase):
         def foo():
             a = {'a': {'b1': 10, 'b2': 'string'}}
             bar(a)
+
+        foo()
+
+    def test_dict_as_arg(self):
+        @njit
+        def bar(fake_kwargs=None):
+            if fake_kwargs is not None:
+                # Add 10 to array in key 'd'
+                fake_kwargs['d'][:] += 10
+
+        @njit
+        def foo():
+            a = 1
+            b = 2j
+            c = 'string'
+            d = np.zeros(3)
+            e = {'a': a, 'b': b, 'c': c, 'd': d}
+            bar(fake_kwargs=e)
+            return e['d']
+
+        np.testing.assert_allclose(foo(), np.ones(3) * 10)
+
+    def test_dict_with_single_literallist_value(self):
+        #see issue #6094
+        @njit
+        def foo():
+            z = {"A": [lambda a: 2 * a, "B"]}
+            return z["A"][0](5)
+
+        self.assertPreciseEqual(foo(), foo.py_func())
+
+    def test_tuple_not_in_mro(self):
+        # Related to #6094, make sure that LiteralStrKey does not inherit from
+        # types.BaseTuple as this breaks isinstance checks.
+        def bar(x):
+            pass
+
+        @overload(bar)
+        def ol_bar(x):
+            self.assertFalse(isinstance(x, types.BaseTuple))
+            self.assertTrue(isinstance(x, types.LiteralStrKeyDict))
+            return lambda x: ...
+
+        @njit
+        def foo():
+            d = {'a': 1, 'b': 'c'}
+            bar(d)
 
         foo()
 

@@ -4,7 +4,7 @@ Thanks for wanting to contribute to Numba :)
 
 First, if you need some help or want to chat to the core developers, please
 visit https://gitter.im/numba/numba for real time chat or post to the Numba
-mailing list https://groups.google.com/a/continuum.io/forum/#!forum/numba-users.
+forum https://numba.discourse.group/.
 
 Here's some guidelines to help the review process go smoothly.
 
@@ -33,3 +33,6 @@ Here's some guidelines to help the review process go smoothly.
 Many thanks in advance for your cooperation!
 
 -->
+
+## Reference an existing issue
+<!-- You can link to an existing issue using the github syntax #<issue number>  -->

@@ -3,7 +3,7 @@ Function descriptors.
 """
 
 from collections import defaultdict
-import sys
+import importlib
 
 from numba.core import types, itanium_mangler
 from numba.core.utils import _dynamic_modname, _dynamic_module
@@ -90,11 +90,12 @@ class FunctionDescriptor(object):
             return _dynamic_module
         else:
             try:
-                return sys.modules[self.modname]
-            except:
+                # ensure module exist
+                return importlib.import_module(self.modname)
+            except ImportError:
                 raise ModuleNotFoundError(
                     f"can't compile {self.qualname}: "
-                    f"import of module {self.modname} failed")
+                    f"import of module {self.modname} failed") from None
 
     def lookup_function(self):
         """
@@ -161,10 +162,11 @@ class FunctionDescriptor(object):
         return qualname, unique_name, modname, doc, args, kws, global_dict
 
     @classmethod
-    def _from_python_function(cls, func_ir, typemap, restype, calltypes,
-                              native, mangler=None, inline=False, noalias=False):
+    def _from_python_function(cls, func_ir, typemap, restype,
+                              calltypes, native, mangler=None,
+                              inline=False, noalias=False):
         (qualname, unique_name, modname, doc, args, kws, global_dict,
-         )= cls._get_function_info(func_ir)
+         ) = cls._get_function_info(func_ir)
 
         self = cls(native, modname, qualname, unique_name, doc,
                    typemap, restype, calltypes,
@@ -212,8 +214,9 @@ class ExternalFunctionDescriptor(FunctionDescriptor):
 
     def __init__(self, name, restype, argtypes):
         args = ["arg%d" % i for i in range(len(argtypes))]
-        super(ExternalFunctionDescriptor, self).__init__(native=True,
-                modname=None, qualname=name, unique_name=name, doc='',
-                typemap=None, restype=restype, calltypes=None,
-                args=args, kws=None, mangler=lambda a, x: a,
-                argtypes=argtypes)
+
+        super(ExternalFunctionDescriptor, self
+              ).__init__(native=True, modname=None, qualname=name,
+                         unique_name=name, doc='', typemap=None,
+                         restype=restype, calltypes=None, args=args,
+                         kws=None, mangler=lambda a, x: a, argtypes=argtypes)

@@ -1,5 +1,5 @@
 from numba import jit, typeof
-from numba.core import types, utils, serialize, sigutils
+from numba.core import cgutils, types, serialize, sigutils
 from numba.core.typing import npydecl
 from numba.core.typing.templates import AbstractTemplate, signature
 from numba.np.ufunc import _internal
@@ -38,8 +38,9 @@ def make_dufunc_kernel(_dufunc):
                 func_type = self.context.call_conv.get_function_type(
                     isig.return_type, isig.args)
             module = self.builder.block.function.module
-            entry_point = module.get_or_insert_function(
-                func_type, name=self.cres.fndesc.llvm_func_name)
+            entry_point = cgutils.get_or_insert_function(
+                module, func_type,
+                self.cres.fndesc.llvm_func_name)
             entry_point.attributes.add("alwaysinline")
 
             _, res = self.context.call_conv.call_function(
@@ -60,10 +61,9 @@ class DUFuncLowerer(object):
 
     def __call__(self, context, builder, sig, args):
         from numba.np import npyimpl
-        explicit_output = len(args) > self.kernel.dufunc.ufunc.nin
         return npyimpl.numpy_ufunc_kernel(context, builder, sig, args,
-                                          self.kernel,
-                                          explicit_output=explicit_output)
+                                          self.kernel.dufunc.ufunc,
+                                          self.kernel)
 
 
 class DUFunc(serialize.ReduceMixin, _internal._DUFunc):
@@ -79,7 +79,7 @@ class DUFunc(serialize.ReduceMixin, _internal._DUFunc):
     def __init__(self, py_func, identity=None, cache=False, targetoptions={}):
         if isinstance(py_func, Dispatcher):
             py_func = py_func.py_func
-        dispatcher = jit(target='npyufunc',
+        dispatcher = jit(_target='npyufunc',
                          cache=cache,
                          **targetoptions)(py_func)
         self._initialize(dispatcher, identity)
@@ -222,7 +222,7 @@ class DUFunc(serialize.ReduceMixin, _internal._DUFunc):
             cres, argtys, return_type)
         dtypenums, ptr, env = ufuncbuilder._build_element_wise_ufunc_wrapper(
             cres, actual_sig)
-        self._add_loop(utils.longint(ptr), dtypenums)
+        self._add_loop(int(ptr), dtypenums)
         self._keepalive.append((ptr, cres.library, env))
         self._lower_me.libs.append(cres.library)
         return cres

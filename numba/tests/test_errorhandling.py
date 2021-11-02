@@ -8,13 +8,14 @@ import os
 from numba import jit, njit, typed, int64, types
 from numba.core import errors
 import numba.core.typing.cffi_utils as cffi_support
+from numba.experimental import structref
 from numba.extending import (overload, intrinsic, overload_method,
                              overload_attribute)
 from numba.core.compiler import CompilerBase
 from numba.core.untyped_passes import (TranslateByteCode, FixupArgs,
                                        IRProcessing,)
 from numba.core.typed_passes import (NopythonTypeInference, DeadCodeElimination,
-                                     NoPythonBackend)
+                                     NoPythonBackend, NativeLowering)
 from numba.core.compiler_machinery import PassManager
 from numba.core.types.functions import _err_reasons as error_reasons
 
@@ -109,6 +110,7 @@ class TestMiscErrorHandling(unittest.TestCase):
                 pm.add_pass(DeadCodeElimination, "DCE")
                 # typing
                 pm.add_pass(NopythonTypeInference, "nopython frontend")
+                pm.add_pass(NativeLowering, "native lowering")
                 pm.add_pass(NoPythonBackend, "nopython mode backend")
                 pm.finalize()
                 return [pm]
@@ -273,9 +275,10 @@ class TestErrorMessages(unittest.TestCase):
 
         excstr = str(raises.exception)
 
-        self.assertIn("Operator Overload in function 'add'", excstr)
-        # there'll be numerous matched templates that don't work
-        self.assertIn("<numerous>", excstr)
+        self.assertIn("Overload of function 'add'", excstr)
+        # there'll be numerous matched templates that don't work but as they
+        # are mostly "overload_glue"s they'll just appear as "No match".
+        self.assertIn("No match.", excstr)
 
     def test_abstract_template_source(self):
         # hits AbstractTemplate
@@ -299,7 +302,8 @@ class TestErrorMessages(unittest.TestCase):
             foo()
 
         excstr = str(raises.exception)
-        self.assertIn("Overload of function 'angle'", excstr)
+        self.assertIn("No implementation of function Function(<function angle",
+                      excstr)
 
     def test_overloadfunction_template_source(self):
         # hits _OverloadFunctionTemplate
@@ -422,6 +426,25 @@ class TestErrorMessages(unittest.TestCase):
 
         excstr = str(raises.exception)
         self.assertIn("Type Restricted Function in function 'unknown'", excstr)
+
+    def test_missing_source(self):
+
+        @structref.register
+        class ParticleType(types.StructRef):
+            pass
+
+        class Particle(structref.StructRefProxy):
+            def __new__(cls, pos, mass):
+                return structref.StructRefProxy.__new__(cls, pos)
+                # didn't provide the required mass argument ----^
+
+        structref.define_proxy(Particle, ParticleType, ["pos", "mass"])
+
+        with self.assertRaises(errors.TypingError) as raises:
+            Particle(pos=1, mass=2)
+
+        excstr = str(raises.exception)
+        self.assertIn("required positional argument: 'mass'", excstr)
 
 
 class TestDeveloperSpecificErrorMessages(SerialMixin, unittest.TestCase):

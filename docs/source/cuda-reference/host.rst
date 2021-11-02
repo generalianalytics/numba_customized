@@ -84,7 +84,11 @@ the functionality of the selected device:
 
    .. attribute:: name
 
-      The name of the device (e.g. "GeForce GTX 970")
+      The name of the device (e.g. "GeForce GTX 970").
+
+   .. attribute:: uuid
+
+      The UUID of the device (e.g. "GPU-e6489c45-5b68-3b03-bab7-0e7c8e809643").
 
    .. method:: reset
 
@@ -175,10 +179,17 @@ transfers and kernel execution. For further details on streams, see the `CUDA C
 Programming Guide Streams section
 <http://docs.nvidia.com/cuda/cuda-c-programming-guide/#streams>`_.
 
+Numba defaults to using the legacy default stream as the default stream. The
+per-thread default stream can be made the default stream by setting the
+environment variable ``NUMBA_CUDA_PER_THREAD_DEFAULT_STREAM`` to ``1`` (see the
+:ref:`CUDA Environment Variables section <numba-envvars-gpu-support>`).
+Regardless of this setting, the objects representing the legacy and per-thread
+default streams can be constructed using the functions below.
+
 Streams are instances of :class:`numba.cuda.cudadrv.driver.Stream`:
 
 .. autoclass:: numba.cuda.cudadrv.driver.Stream
-   :members: synchronize, auto_synchronize
+   :members: synchronize, auto_synchronize, add_callback, async_done
 
 To create a new stream:
 
@@ -202,3 +213,20 @@ stream, and the stream must remain valid whilst the Numba ``Stream`` object is
 in use.
 
 .. autofunction:: numba.cuda.external_stream
+
+
+Runtime
+-------
+
+Numba generally uses the Driver API, but it provides a simple wrapper to the
+Runtime API so that the version of the runtime in use can be queried. This is
+accessed through ``cuda.runtime``, which is an instance of the
+:class:`numba.cuda.cudadrv.runtime.Runtime` class:
+
+.. autoclass:: numba.cuda.cudadrv.runtime.Runtime
+   :members: get_version, is_supported_version, supported_versions
+
+Whether the current runtime is officially supported and tested with the current
+version of Numba can also be queried:
+
+.. autofunction:: numba.cuda.is_supported_version

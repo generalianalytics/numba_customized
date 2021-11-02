@@ -347,10 +347,12 @@ class BuildMapConstraint(object):
                 # Single key:value in ctor, key is str, value is an otherwise
                 # illegal container type, e.g. LiteralStrKeyDict or
                 # List, there's no way to put this into a typed.Dict, so make it
-                # a LiteralStrKeyDict.
+                # a LiteralStrKeyDict, same goes for LiteralList.
                 if len(vtys) == 1:
                     valty = vtys[0]
-                    if isinstance(valty, (types.LiteralStrKeyDict, types.List)):
+                    if isinstance(valty, (types.LiteralStrKeyDict,
+                                          types.List,
+                                          types.LiteralList)):
                         homogeneous = False
 
                 if strkey and not homogeneous:
@@ -580,6 +582,9 @@ class CallConstraint(object):
                 return
 
         # Resolve call type
+        if isinstance(fnty, types.TypeRef):
+            # Unwrap TypeRef
+            fnty = fnty.instance_type
         try:
             sig = typeinfer.resolve_call(fnty, pos_args, kw_args)
         except ForceLiteralArg as e:
@@ -991,7 +996,7 @@ class TypeInferer(object):
 
     def _get_return_vars(self):
         rets = []
-        for blk in utils.itervalues(self.blocks):
+        for blk in self.blocks.values():
             inst = blk.terminator
             if isinstance(inst, ir.Return):
                 rets.append(inst.value)
@@ -1017,7 +1022,7 @@ class TypeInferer(object):
             self.lock_type(var.name, typ, loc=None)
 
     def build_constraint(self):
-        for blk in utils.itervalues(self.blocks):
+        for blk in self.blocks.values():
             for inst in blk.body:
                 self.constrain_statement(inst)
 
@@ -1138,7 +1143,7 @@ precise type that can be inferred from the other variables. Whilst sometimes
 the type of empty lists can be inferred, this is not always the case, see this
 documentation for help:
 
-http://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-has-an-untyped-list-problem
+https://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-has-an-untyped-list-problem
 """
             if offender is not None:
                 # This block deals with imprecise lists
@@ -1212,6 +1217,9 @@ http://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-has-an-u
                 raise e
             else:
                 retty = None
+        else:
+            typdict = utils.UniqueDict(
+                typdict, **{v.name: retty for v in self._get_return_vars()})
 
         try:
             fntys = self.get_function_types(typdict)
@@ -1479,8 +1487,7 @@ http://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-has-an-u
         """
         Ensure that builtins are not modified.
         """
-        if (gvar.name in ('range', 'xrange') and
-                gvar.value not in utils.RANGE_ITER_OBJECTS):
+        if gvar.name == 'range' and gvar.value is not range:
             bad = True
         elif gvar.name == 'slice' and gvar.value is not slice:
             bad = True
@@ -1597,17 +1604,21 @@ http://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-has-an-u
         # Setting literal_value for globals because they are handled
         # like const value in numba
         lit = types.maybe_literal(gvar.value)
-        self.lock_type(target.name, lit or typ, loc=inst.loc)
+        # The user may have provided the type for this variable already.
+        # In this case, call add_type() to make sure the value type is
+        # consistent. See numba.tests.test_array_reductions
+        # TestArrayReductions.test_array_cumsum for examples.
+        # Variable type locked by using the locals dict.
+        tv = self.typevars[target.name]
+        if tv.locked:
+            tv.add_type(lit or typ, loc=inst.loc)
+        else:
+            self.lock_type(target.name, lit or typ, loc=inst.loc)
         self.assumed_immutables.add(inst)
 
     def typeof_expr(self, inst, target, expr):
         if expr.op == 'call':
-            if isinstance(expr.func, ir.Intrinsic):
-                sig = expr.func.type
-                self.add_type(target.name, sig.return_type, loc=inst.loc)
-                self.add_calltype(expr, sig)
-            else:
-                self.typeof_call(inst, target, expr)
+            self.typeof_call(inst, target, expr)
         elif expr.op in ('getiter', 'iternext'):
             self.typeof_intrinsic_call(inst, target, expr.op, expr.value)
         elif expr.op == 'exhaust_iter':

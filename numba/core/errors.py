@@ -11,7 +11,7 @@ import warnings
 import numba.core.config
 import numpy as np
 from collections import defaultdict
-from numba.core.utils import add_metaclass, reraise, chain_exception
+from numba.core.utils import chain_exception
 from functools import wraps
 from abc import abstractmethod
 
@@ -76,11 +76,30 @@ class NumbaExperimentalFeatureWarning(NumbaWarning):
     Warning category for using an experimental feature.
     """
 
+
+class NumbaInvalidConfigWarning(NumbaWarning):
+    """
+    Warning category for using an invalid configuration.
+    """
+
+
+class NumbaPedanticWarning(NumbaWarning):
+    """
+    Warning category for reporting pedantic messages.
+    """
+    def __init__(self, msg, **kwargs):
+        super().__init__(f"{msg}\n{pedantic_warning_info}")
+
+
+class NumbaIRAssumptionWarning(NumbaPedanticWarning):
+    """
+    Warning category for reporting an IR assumption violation.
+    """
+
 # These are needed in the color formatting of errors setup
 
 
-@add_metaclass(abc.ABCMeta)
-class _ColorScheme(object):
+class _ColorScheme(metaclass=abc.ABCMeta):
 
     @abstractmethod
     def code(self, msg):
@@ -309,6 +328,13 @@ else:
             _termcolor_inst = HighlightColorScheme(scheme)
         return _termcolor_inst
 
+
+pedantic_warning_info = """
+This warning came from an internal pedantic check. Please report the warning
+message and traceback, along with a minimal reproducer at:
+https://github.com/numba/numba/issues/new?template=bug_report.md
+"""
+
 feedback_details = """
 Please report the error message and traceback, along with a minimal reproducer
 at: https://github.com/numba/numba/issues/new
@@ -336,9 +362,9 @@ If the code is valid and the unsupported functionality is important to you
 please file a feature request at: https://github.com/numba/numba/issues/new
 
 To see Python/NumPy features supported by the latest release of Numba visit:
-http://numba.pydata.org/numba-doc/latest/reference/pysupported.html
+https://numba.pydata.org/numba-doc/latest/reference/pysupported.html
 and
-http://numba.pydata.org/numba-doc/latest/reference/numpysupported.html
+https://numba.pydata.org/numba-doc/latest/reference/numpysupported.html
 """
 
 constant_inference_info = """
@@ -347,7 +373,7 @@ a constant. This could well be a current limitation in Numba's internals,
 however please first check that your code is valid for compilation,
 particularly with respect to string interpolation (not supported!) and
 the requirement of compile time constants as arguments to exceptions:
-http://numba.pydata.org/numba-doc/latest/reference/pysupported.html?highlight=exceptions#constructs
+https://numba.pydata.org/numba-doc/latest/reference/pysupported.html?highlight=exceptions#constructs
 
 If the code is valid and the unsupported functionality is important to you
 please file a feature request at: https://github.com/numba/numba/issues/new
@@ -360,12 +386,12 @@ This is not usually a problem with Numba itself but instead often caused by
 the use of unsupported features or an issue in resolving types.
 
 To see Python/NumPy features supported by the latest release of Numba visit:
-http://numba.pydata.org/numba-doc/latest/reference/pysupported.html
+https://numba.pydata.org/numba-doc/latest/reference/pysupported.html
 and
-http://numba.pydata.org/numba-doc/latest/reference/numpysupported.html
+https://numba.pydata.org/numba-doc/latest/reference/numpysupported.html
 
 For more information about typing errors and how to debug them visit:
-http://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-doesn-t-compile
+https://numba.pydata.org/numba-doc/latest/user/troubleshoot.html#my-code-doesn-t-compile
 
 If you think your code should work with Numba, please report the error message
 and traceback, along with a minimal reproducer at:
@@ -545,7 +571,8 @@ class NotDefinedError(IRError):
 
     def __init__(self, name, loc=None):
         self.name = name
-        msg = "Variable '%s' is not defined." % name
+        msg = ("The compiler failed to analyze the bytecode. "
+               "Variable '%s' is not defined." % name)
         super(NotDefinedError, self).__init__(msg, loc=loc)
 
 
@@ -556,13 +583,6 @@ class VerificationError(IRError):
     terminators are both present and in the correct places within the IR. If
     it is the case that this condition is not met, a VerificationError is
     raised.
-    """
-    pass
-
-
-class MacroError(NumbaError):
-    """
-    An error occurred during macro expansion.
     """
     pass
 
@@ -650,6 +670,17 @@ class InternalError(NumbaError):
     def __init__(self, exception):
         super(InternalError, self).__init__(str(exception))
         self.old_exception = exception
+
+
+class InternalTargetMismatchError(InternalError):
+    """For signalling a target mismatch error occurred internally within the
+    compiler.
+    """
+    def __init__(self, kind, target_hw, hw_clazz):
+        msg = (f"{kind.title()} being resolved on a target from which it does "
+               f"not inherit. Local target is {target_hw}, declared "
+               f"target class is {hw_clazz}.")
+        super().__init__(msg)
 
 
 class RequireLiteralValue(TypingError):
@@ -746,10 +777,13 @@ def new_error_context(fmt_, *args, **kwargs):
     except NumbaError as e:
         e.add_context(_format_msg(fmt_, args, kwargs))
         raise
+    except AssertionError:
+        # Let assertion error pass through for shorter traceback in debugging
+        raise
     except Exception as e:
         newerr = errcls(e).add_context(_format_msg(fmt_, args, kwargs))
         tb = sys.exc_info()[2] if numba.core.config.FULL_TRACEBACKS else None
-        reraise(type(newerr), newerr, tb)
+        raise newerr.with_traceback(tb)
 
 
 __all__ += [name for (name, value) in globals().items()

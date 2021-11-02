@@ -1,4 +1,5 @@
 from itertools import product, cycle, permutations
+import gc
 import sys
 import warnings
 
@@ -8,7 +9,7 @@ from numba import jit, typeof
 from numba.core import types
 from numba.core.compiler import compile_isolated
 from numba.core.errors import TypingError, LoweringError
-from numba.np.numpy_support import as_dtype
+from numba.np.numpy_support import as_dtype, numpy_version
 from numba.tests.support import (TestCase, CompilationCache, MemoryLeak,
                                  MemoryLeakMixin, tag, needs_blas)
 import unittest
@@ -151,6 +152,9 @@ def np_frombuffer(b):
 def np_frombuffer_dtype(b):
     return np.frombuffer(b, dtype=np.complex64)
 
+def np_frombuffer_dtype_str(b):
+    return np.frombuffer(b, dtype='complex64')
+
 def np_frombuffer_allocated(shape):
     """
     np.frombuffer() on a Numba-allocated buffer.
@@ -228,6 +232,24 @@ def array_real(a):
 
 def array_imag(a):
     return np.imag(a)
+
+def np_clip_no_out(a, a_min, a_max):
+    return np.clip(a, a_min, a_max)
+
+def np_clip(a, a_min, a_max, out=None):
+    return np.clip(a, a_min, a_max, out)
+
+def np_clip_kwargs(a, a_min, a_max, out=None):
+    return np.clip(a, a_min, a_max, out=out)
+
+def array_clip(a, a_min=None, a_max=None, out=None):
+    return a.clip(a_min, a_max, out)
+
+def array_clip_kwargs(a, a_min=None, a_max=None, out=None):
+    return a.clip(a_min, a_max, out=out)
+
+def array_clip_no_out(a, a_min, a_max):
+    return a.clip(a_min, a_max)
 
 def array_conj(a):
     return a.conj()
@@ -486,8 +508,12 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             got = run(buf)
             self.assertPreciseEqual(got, expected)
             del expected
+            # Note gc.collect is due to references in `except ... as e` that
+            # aren't immediately cleared
+            gc.collect()
             self.assertEqual(sys.getrefcount(buf), old_refcnt + 1)
             del got
+            gc.collect()
             self.assertEqual(sys.getrefcount(buf), old_refcnt)
             self.memory_leak_teardown()
 
@@ -512,6 +538,22 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
 
     def test_np_frombuffer_dtype(self):
         self.check_np_frombuffer(np_frombuffer_dtype)
+
+    def test_np_frombuffer_dtype_str(self):
+        self.check_np_frombuffer(np_frombuffer_dtype_str)
+
+    def test_np_frombuffer_dtype_non_const_str(self):
+        @jit(nopython=True)
+        def func(buf, dt):
+            np.frombuffer(buf, dtype=dt)
+
+        with self.assertRaises(TypingError) as raises:
+            func(bytearray(range(16)), 'int32')
+
+        excstr = str(raises.exception)
+        self.assertIn('No match', excstr)
+        self.assertIn('frombuffer(bytearray(uint8, 1d, C), dtype=unicode_type)',
+                      excstr)
 
     def check_layout_dependent_func(self, pyfunc, fac=np.arange):
         def is_same(a, b):
@@ -766,7 +808,7 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             check_ok(4)
             check_ok(5.5)
             check_ok(-3)
-            check_ok(np.complex(4, 4))
+            check_ok(complex(4, 4))
             check_ok(np.int8(0))
 
     def test_arange_2_arg(self):
@@ -791,8 +833,8 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             check_ok(-8, -1, pyfunc, cfunc)
             check_ok(4, 0.5, pyfunc, cfunc)
             check_ok(0.5, 4, pyfunc, cfunc)
-            check_ok(np.complex(1, 1), np.complex(4, 4), pyfunc, cfunc)
-            check_ok(np.complex(4, 4), np.complex(1, 1), pyfunc, cfunc)
+            check_ok(complex(1, 1), complex(4, 4), pyfunc, cfunc)
+            check_ok(complex(4, 4), complex(1, 1), pyfunc, cfunc)
             check_ok(3, None, pyfunc, cfunc)
 
         pyfunc = np_arange_1_dtype
@@ -826,7 +868,7 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             check_ok(0, -10, -2, pyfunc, cfunc)
             check_ok(0.5, 4, 2, pyfunc, cfunc)
             check_ok(0, 1, 0.1, pyfunc, cfunc)
-            check_ok(0, np.complex(4, 4), np.complex(1, 1), pyfunc, cfunc)
+            check_ok(0, complex(4, 4), complex(1, 1), pyfunc, cfunc)
             check_ok(3, 6, None, pyfunc, cfunc)
             check_ok(3, None, None, pyfunc, cfunc)
             check_ok(np.int8(0), np.int8(5), np.int8(1), pyfunc, cfunc)
@@ -860,7 +902,7 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             check_ok(0, -10, -2, np.float32)
             check_ok(0.5, 4, 2, None)
             check_ok(0, 1, 0.1, np.complex128)
-            check_ok(0, np.complex(4, 4), np.complex(1, 1), np.complex128)
+            check_ok(0, complex(4, 4), complex(1, 1), np.complex128)
             check_ok(3, 6, None, None)
             check_ok(3, None, None, None)
 
@@ -902,6 +944,16 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
                         f(*inputs)
                     self.assertIn("Maximum allowed size exceeded",
                                 str(raises.exception))
+
+    def test_arange_accuracy(self):
+        # Checking arange reasonably replicates NumPy's algorithm
+        # see https://github.com/numba/numba/issues/6768
+        @jit(nopython=True)
+        def foo(step):
+            return np.arange(0, 1 + step, step)
+
+        x = 0.010101010101010102
+        self.assertPreciseEqual(foo(x), foo.py_func(x))
 
     def test_item(self):
         pyfunc = array_item
@@ -1309,6 +1361,63 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
         x, y = np.meshgrid(x, x)
         z = x + 1j*y
         np.testing.assert_equal(pyfunc(z), cfunc(z))
+
+    def test_clip(self):
+        has_out = (np_clip, np_clip_kwargs, array_clip, array_clip_kwargs)
+        has_no_out = (np_clip_no_out, array_clip_no_out)
+        # TODO: scalars are not tested (issue #3469)
+        for a in (np.linspace(-10, 10, 101),
+                  np.linspace(-10, 10, 40).reshape(5, 2, 4)):
+            for pyfunc in has_out + has_no_out:
+                cfunc = jit(nopython=True)(pyfunc)
+
+                msg = "array_clip: must set either max or min"
+                with self.assertRaisesRegex(ValueError, msg):
+                    cfunc(a, None, None)
+
+                np.testing.assert_equal(pyfunc(a, 0, None), cfunc(a, 0, None))
+                np.testing.assert_equal(pyfunc(a, None, 0), cfunc(a, None, 0))
+
+                np.testing.assert_equal(pyfunc(a, -5, 5), cfunc(a, -5, 5))
+
+                if pyfunc in has_out:
+                    pyout = np.empty_like(a)
+                    cout = np.empty_like(a)
+                    np.testing.assert_equal(pyfunc(a, -5, 5, pyout),
+                                            cfunc(a, -5, 5, cout))
+                    np.testing.assert_equal(pyout, cout)
+
+                # verifies that type-inference is working on the return value
+                # this used to trigger issue #3489
+                def lower_clip_result(a):
+                    return np.expm1(cfunc(a, -5, 5))
+                np.testing.assert_almost_equal(
+                    lower_clip_result(a),
+                    jit(nopython=True)(lower_clip_result)(a))
+
+    def test_clip_bad_array(self):
+        cfunc = jit(nopython=True)(np_clip)
+        msg = '.*The argument "a" must be array-like.*'
+        with self.assertRaisesRegex(TypingError, msg):
+            cfunc(None, 0, 10)
+
+    def test_clip_bad_min(self):
+        cfunc = jit(nopython=True)(np_clip)
+        msg = '.*The argument "a_min" must be a number.*'
+        with self.assertRaisesRegex(TypingError, msg):
+            cfunc(1, 'a', 10)
+
+    def test_clip_bad_max(self):
+        cfunc = jit(nopython=True)(np_clip)
+        msg = '.*The argument "a_max" must be a number.*'
+        with self.assertRaisesRegex(TypingError, msg):
+            cfunc(1, 1, 'b')
+
+    def test_clip_bad_out(self):
+        cfunc = jit(nopython=True)(np_clip)
+        msg = '.*The argument "out" must be an array if it is provided.*'
+        with self.assertRaisesRegex(TypingError, msg):
+            cfunc(5, 1, 10, out=6)
 
     def test_conj(self):
         for pyfunc in [array_conj, array_conjugate]:

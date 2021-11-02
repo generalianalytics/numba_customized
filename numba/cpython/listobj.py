@@ -278,7 +278,8 @@ class ListInstance(_ListPayloadMixin):
         mod = builder.module
         # Declare dtor
         fnty = ir.FunctionType(ir.VoidType(), [cgutils.voidptr_t])
-        fn = mod.get_or_insert_function(fnty, name='.dtor.list.{}'.format(self.dtype))
+        fn = cgutils.get_or_insert_function(mod, fnty,
+                                            '.dtor.list.{}'.format(self.dtype))
         if not fn.is_declaration:
             # End early if the dtor is already defined
             return fn
@@ -671,6 +672,14 @@ def sequence_bool(context, builder, sig, args):
         return len(seq) != 0
 
     return context.compile_internal(builder, sequence_bool_impl, sig, args)
+
+
+@overload(operator.truth)
+def sequence_truth(seq):
+    if isinstance(seq, types.Sequence):
+        def impl(seq):
+            return len(seq) != 0
+        return impl
 
 
 @lower_builtin(operator.add, types.List, types.List)
@@ -1215,6 +1224,13 @@ def literal_list_getitem(lst, *args):
            "statically determined.")
     raise errors.TypingError(msg)
 
+@overload(len)
+def literal_list_len(lst):
+    if not isinstance(lst, types.LiteralList):
+        return
+    l = lst.count
+    return lambda lst: l
+
 @overload(operator.contains)
 def literal_list_contains(lst, item):
     if isinstance(lst, types.LiteralList):
@@ -1224,3 +1240,14 @@ def literal_list_contains(lst, item):
                     return True
             return False
         return impl
+
+@lower_cast(types.LiteralList, types.LiteralList)
+def literallist_to_literallist(context, builder, fromty, toty, val):
+    if len(fromty) != len(toty):
+        # Disallowed by typing layer
+        raise NotImplementedError
+
+    olditems = cgutils.unpack_tuple(builder, val, len(fromty))
+    items = [context.cast(builder, v, f, t)
+             for v, f, t in zip(olditems, fromty, toty)]
+    return context.make_tuple(builder, toty, items)

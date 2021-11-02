@@ -10,6 +10,7 @@ from numba.cuda.testing import skip_on_cudasim
 @skip_on_cudasim('CUDA Memory API unsupported in the simulator')
 class TestCudaMemory(ContextResettingTestCase):
     def setUp(self):
+        super().setUp()
         self.context = devices.get_context()
 
     def tearDown(self):
@@ -39,6 +40,10 @@ class TestCudaMemory(ContextResettingTestCase):
         devmem = self.context.mempin(ary, ary.ctypes.data,
                                      ary.size * ary.dtype.itemsize,
                                      mapped=True)
+        self._template(devmem)
+
+    def test_managed_memory(self):
+        devmem = self.context.memallocmanaged(1024)
         self._template(devmem)
 
     def test_derived_pointer(self):
@@ -91,9 +96,9 @@ class TestCudaMemory(ContextResettingTestCase):
         self.assertEqual(dtor_invoked[0], 2)
 
 
-@skip_on_cudasim('CUDA Memory API unsupported in the simulator')
 class TestCudaMemoryFunctions(ContextResettingTestCase):
     def setUp(self):
+        super().setUp()
         self.context = devices.get_context()
 
     def tearDown(self):
